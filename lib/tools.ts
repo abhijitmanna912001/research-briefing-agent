@@ -6,6 +6,18 @@ import { VercelProvider } from "@swytchcode/runtime/providers/vercel";
 // Toolkit names are matched against the integration strings in tooling.json
 // ("Google Drive.drive@v3", "Notion.notion@...", "Gmail.gmail@v1"), so Drive is "drive", not
 // "google-drive" (which silently matches nothing).
+// The swytchcode CLI resolves its credential cache (SQLite) and config at
+// os.homedir()/.swytchcode. Vercel functions don't give that a writable HOME (and the
+// dashboard refuses to let you set HOME as a project env var - it's a reserved name), so
+// point it at /tmp, which is always writable in the function. This only has to be set
+// before the first exec() call, which happens inside getAgentTools() below, and it flows
+// through to the spawned CLI process because the runtime spreads process.env into the
+// child's env. Locally this does nothing harmful either - /tmp exists everywhere Node runs.
+
+if (process.env.VERCEL) {
+  process.env.HOME = "/tmp";
+}
+
 const TOOLKITS = ["drive", "notion", "gmail"];
 
 const NOTION_MARKDOWN_VERSION = "2026-03-11";
@@ -460,3 +472,4 @@ export function getAgentTools(): Promise<ToolSet> {
   });
   return toolsPromise;
 }
+
