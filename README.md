@@ -10,10 +10,12 @@ This agent's tool execution goes through the Swytchcode CLI (`swytchcode`), whic
 runtime invokes as a subprocess. The deployed Vercel URL ships and runs that CLI
 correctly (`next.config.ts` traces the platform binary and `.swytchcode/` into the
 function, and `HOME` is pointed at `/tmp` so the CLI has a writable cache) — but tool
-calls there fail with a clean `missing credentials for <provider>` error, by design:
-per [Swytchcode's own docs](https://docs.swytchcode.com/cli/authentication/), a
-connected provider's OAuth credentials are written only to `~/.swytchcode/credentials.db`
-on the machine that ran `swytchcode auth connect`, and are never synced elsewhere -
+calls there fail with a clean `missing credentials for <provider>` error
+(`category: "auth"`). Swytchcode's docs back this up: connected provider credentials are
+written only to `~/.swytchcode/credentials.db` on the machine that ran `swytchcode auth
+connect`, and Cloud Sync (their own words) "never" syncs `credentials.db` or any
+credential payload — see [cli/authentication](https://docs.swytchcode.com/cli/authentication/)
+and [guides/managed-authentication](https://docs.swytchcode.com/guides/managed-authentication/).
 `SWYTCHCODE_TOKEN`/`SWYTCHCODE_WORKSPACE_UUID` authenticate the CLI to Swytchcode's own
 backend, not to the third-party providers. So the working demo runs locally
 (`npm run dev`), where the CLI is installed and provider credentials are connected via
