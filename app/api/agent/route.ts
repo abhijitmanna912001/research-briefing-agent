@@ -6,8 +6,9 @@ import { getAgentTools } from "@/lib/tools";
 import { gateForNextStep } from "@/lib/source-gate";
 
 // The runtime shells out to the swytchcode CLI, so this must run on Node (the default).
-// Multi-step research (search -> read -> synthesize) can take a while.
-export const maxDuration = 120;
+// Multi-step research (search -> read -> synthesize) can take a while. 60s is the Vercel Hobby plan
+// maximum; raise it (up to 300 on Pro) if long research runs get cut off.
+export const maxDuration = 60;
 
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
 
