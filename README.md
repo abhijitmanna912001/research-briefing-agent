@@ -67,3 +67,12 @@ are never sent). If a tool fails, the agent says so and asks what to do next.
 
 Do not set `SWYTCHCODE_BIN` to the npm-installed `swytchcode` wrapper script: the
 wrapper treats it as the real binary and spawns itself in a loop. Leave it unset.
+
+## Deployment note
+
+This agent's tool execution goes through the Swytchcode CLI (`swytchcode`),
+which the runtime invokes as a subprocess. Vercel's serverless functions
+don't have this binary available, so the deployed Vercel URL will fail
+at the tool-loading step. The working demo runs locally
+(`npm run dev`), where the CLI is installed and provider credentials
+are connected via `swytchcode auth connect`.
