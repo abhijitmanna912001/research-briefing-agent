@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { jsonSchema, tool } from "ai";
 import type { ToolSet } from "ai";
 import { Swytchcode } from "@swytchcode/runtime";
@@ -16,6 +18,24 @@ import { VercelProvider } from "@swytchcode/runtime/providers/vercel";
 
 if (process.env.VERCEL) {
   process.env.HOME = "/tmp";
+}
+
+// Experimental: on Vercel, restore a copy of the local swytchcode credentials.db from an env var
+// (base64-encoded), since Swytchcode's own sync never does this (see the README deployment note). Whether
+// a credentials.db is portable across machines is unverified; this is a manual workaround being tried
+// deliberately. Runs at most once per cold start: once written, the file persists for the instance's lifetime.
+// The env var's value and the decoded bytes are credentials, so nothing here logs or echoes either one,
+// including on failure (the warning is a fixed string, and the caught error is deliberately dropped).
+if (process.env.VERCEL && process.env.SWYTCHCODE_CREDENTIALS_DB_B64) {
+  try {
+    const dbPath = join(process.env.HOME ?? "/tmp", ".swytchcode", "credentials.db");
+    if (!existsSync(dbPath)) {
+      mkdirSync(dirname(dbPath), { recursive: true });
+      writeFileSync(dbPath, Buffer.from(process.env.SWYTCHCODE_CREDENTIALS_DB_B64, "base64"), { mode: 0o600 });
+    }
+  } catch {
+    console.warn("[swytchcode] could not restore credentials.db from SWYTCHCODE_CREDENTIALS_DB_B64");
+  }
 }
 
 const TOOLKITS = ["drive", "notion", "gmail"];
