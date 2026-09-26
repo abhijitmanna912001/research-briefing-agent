@@ -73,5 +73,5 @@ async function runSearch(label, args) {
     console.log(`[${label}] FAIL ${String(e.message).replace(/\s+/g, " ").slice(0, 250)}`);
   }
 }
-await runSearch("model sends stale Notion-Version 2022-06-28", { "Notion-Version": "2022-06-28", body: { query: "AuditFlow", page_size: 3 } });
-await runSearch("model sends no version", { body: { query: "AuditFlow", page_size: 3 } });
+await runSearch("model sends stale Notion-Version + junk filter/start_cursor", { query: "AuditFlow", page_size: 3, "Notion-Version": "2022-06-28", filter: { property: "title", value: "string" }, start_cursor: "null" });
+await runSearch("model sends only query", { query: "AuditFlow", page_size: 3 });

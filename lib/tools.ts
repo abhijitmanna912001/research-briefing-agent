@@ -1,6 +1,5 @@
 import { jsonSchema, tool } from "ai";
 import type { ToolSet } from "ai";
-import type { JSONSchema7 } from "json-schema";
 import { Swytchcode } from "@swytchcode/runtime";
 import { VercelProvider } from "@swytchcode/runtime/providers/vercel";
 
@@ -48,33 +47,121 @@ function patchNotionMarkdown(tools: ToolSet): ToolSet {
 
 const NOTION_DEFAULT_VERSION = "2025-09-03";
 
-// notion.search.create / notion.page.create have Notion-Version as an optional header with a
-// default, but the generated schema exposes it and the model sometimes sends an older version
-// (e.g. 2022-06-28), which changes the response shape. Hide the field from the model and always
-// send the default.
-//
-// For search, also hide body.start_cursor: the model fills it with junk like the string "null"
-// (400 "should be a valid uuid"), and this agent never paginates.
-function forceNotionVersion(tools: ToolSet, name: string): ToolSet {
-  const base = tools[name];
+// notion.search.create: the generated schema exposes filter/sort/start_cursor/Notion-Version and the
+// model fills them with junk (filter.property "title" -> 400, start_cursor "null" -> 400, stale
+// Notion-Version 2022-06-28). The model only supplies query and page_size; the filter is locked to
+// pages and the version is pinned.
+function patchNotionSearch(tools: ToolSet): ToolSet {
+  const base = tools.notion_search_create;
   if (!base) return tools;
-  const cid = swx.tools.nameToId(name);
-  const rawInputs = swx.tools.getInputs(cid);
-  const schema = structuredClone((base.inputSchema as { jsonSchema: JSONSchema7 }).jsonSchema);
-  delete schema.properties?.["Notion-Version"];
-  schema.required = (schema.required ?? []).filter((k) => k !== "Notion-Version");
-  const hideCursor = name === "notion_search_create";
-  if (hideCursor) delete (schema.properties?.body as JSONSchema7 | undefined)?.properties?.start_cursor;
+  const cid = swx.tools.nameToId("notion_search_create");
   return {
     ...tools,
-    [name]: tool({
+    notion_search_create: tool({
       description: base.description,
-      inputSchema: jsonSchema<Record<string, unknown>>(schema),
-      execute: (args) => {
-        const body = args.body as Record<string, unknown> | undefined;
-        if (hideCursor && body) delete body.start_cursor;
-        // Spread first so the forced version overrides anything the model sent.
-        return swx.tools.execute(cid, { ...args, "Notion-Version": NOTION_DEFAULT_VERSION }, { _rawInputs: rawInputs });
+      inputSchema: jsonSchema<{ query: string; page_size?: number }>({
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Keywords to match against page titles" },
+          page_size: { type: "integer", minimum: 1, maximum: 25, description: "Max results (default 10)" },
+        },
+        required: ["query"],
+      }),
+      execute: ({ query, page_size }) =>
+        swx.tools.execute(cid, {
+          "Notion-Version": NOTION_DEFAULT_VERSION,
+          body: { query, page_size: page_size ?? 10, filter: { property: "object", value: "page" } },
+        }),
+    }),
+  };
+}
+
+// notion.page.create: the generated schema types `properties` as a string, `children` as a string
+// array and `parent` as a tangle of variant_* objects, so a model cannot build a valid body. The
+// model supplies title, content and an optional parent_page_id; the wrapper builds the request.
+// With no parent the page is created at the workspace root, which this integration allows.
+const NOTION_TEXT_LIMIT = 2000; // max characters per rich_text item
+const NOTION_MAX_BLOCKS = 100; // max children per create request
+const NOTION_ID_RE = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+
+type NotionBlock = Record<string, unknown>;
+
+function richText(text: string) {
+  const parts: { type: "text"; text: { content: string } }[] = [];
+  for (let i = 0; i < text.length; i += NOTION_TEXT_LIMIT) {
+    parts.push({ type: "text", text: { content: text.slice(i, i + NOTION_TEXT_LIMIT) } });
+  }
+  return parts;
+}
+
+// Convert light markdown (headings, bullets, numbered lists, paragraphs) to Notion blocks.
+export function markdownToNotionBlocks(md: string): NotionBlock[] {
+  const blocks: NotionBlock[] = [];
+  for (const raw of md.split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    if (!line.trim()) continue;
+    const heading = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(line);
+    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    let type = "paragraph";
+    let text = line.trim();
+    if (heading) {
+      type = `heading_${Math.min(heading[1].length, 3)}`;
+      text = heading[2];
+    } else if (bullet) {
+      type = "bulleted_list_item";
+      text = bullet[1];
+    } else if (numbered) {
+      type = "numbered_list_item";
+      text = numbered[1];
+    }
+    blocks.push({ object: "block", type, [type]: { rich_text: richText(markdownToPlainText(text)) } });
+  }
+  return blocks;
+}
+
+function patchNotionPageCreate(tools: ToolSet): ToolSet {
+  const base = tools.notion_page_create;
+  if (!base) return tools;
+  const cid = swx.tools.nameToId("notion_page_create");
+  return {
+    ...tools,
+    notion_page_create: tool({
+      description:
+        "Create a Notion page with a title and text content. Created at the workspace root unless parent_page_id " +
+        "is given. Only call when the user explicitly asks to save or write something to Notion.",
+      inputSchema: jsonSchema<{ title: string; content?: string; parent_page_id?: string }>({
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Page title" },
+          content: {
+            type: "string",
+            description: "Page body. Light markdown is fine: # headings, - bullets, 1. numbered items, plain paragraphs.",
+          },
+          parent_page_id: {
+            type: "string",
+            description: "Optional. UUID of an existing page to create this under (e.g. from notion_search_create). Omit to create at the workspace root.",
+          },
+        },
+        required: ["title"],
+      }),
+      execute: async ({ title, content, parent_page_id }) => {
+        if (parent_page_id && !NOTION_ID_RE.test(parent_page_id.trim())) {
+          throw new Error(`notion_page_create failed: parent_page_id must be a Notion page UUID, got "${parent_page_id}"`);
+        }
+        const blocks = content ? markdownToNotionBlocks(content) : [];
+        const truncated = blocks.length > NOTION_MAX_BLOCKS;
+        const result = await swx.tools.execute(cid, {
+          "Notion-Version": NOTION_DEFAULT_VERSION,
+          body: {
+            parent: parent_page_id ? { type: "page_id", page_id: parent_page_id.trim() } : { workspace: true },
+            properties: { title: { title: richText(title.trim()) } },
+            ...(blocks.length && { children: blocks.slice(0, NOTION_MAX_BLOCKS) }),
+          },
+        });
+        return truncated
+          ? { ...(result as object), note: `Content was longer than ${NOTION_MAX_BLOCKS} blocks; the extra blocks were dropped. Tell the user.` }
+          : result;
       },
     }),
   };
@@ -322,8 +409,8 @@ export function getAgentTools(): Promise<ToolSet> {
     // VercelProvider returns an object keyed by tool name (the typings say any[]).
     let tools = (await swx.tools.get({ toolkits: TOOLKITS })) as unknown as ToolSet;
     tools = patchNotionMarkdown(tools);
-    tools = forceNotionVersion(tools, "notion_search_create");
-    tools = forceNotionVersion(tools, "notion_page_create");
+    tools = patchNotionSearch(tools);
+    tools = patchNotionPageCreate(tools);
     tools = patchDriveList(tools);
     tools = patchDriveExport(tools);
     tools = patchGmailDraft(tools);
