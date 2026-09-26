@@ -6,12 +6,18 @@ It searches both sources, reads the best matches, and writes a sourced answer. O
 
 ## Deployment note
 
-This agent's tool execution goes through the Swytchcode CLI (`swytchcode`),
-which the runtime invokes as a subprocess. Vercel's serverless functions
-don't have this binary available, so the deployed Vercel URL will fail
-at the tool-loading step. The working demo runs locally
-(`npm run dev`), where the CLI is installed and provider credentials
-are connected via `swytchcode auth connect`.
+This agent's tool execution goes through the Swytchcode CLI (`swytchcode`), which the
+runtime invokes as a subprocess. The deployed Vercel URL ships and runs that CLI
+correctly (`next.config.ts` traces the platform binary and `.swytchcode/` into the
+function, and `HOME` is pointed at `/tmp` so the CLI has a writable cache) — but tool
+calls there fail with a clean `missing credentials for <provider>` error, by design:
+per [Swytchcode's own docs](https://docs.swytchcode.com/cli/authentication/), a
+connected provider's OAuth credentials are written only to `~/.swytchcode/credentials.db`
+on the machine that ran `swytchcode auth connect`, and are never synced elsewhere -
+`SWYTCHCODE_TOKEN`/`SWYTCHCODE_WORKSPACE_UUID` authenticate the CLI to Swytchcode's own
+backend, not to the third-party providers. So the working demo runs locally
+(`npm run dev`), where the CLI is installed and provider credentials are connected via
+`swytchcode auth connect`.
 
 ## Getting started
 
