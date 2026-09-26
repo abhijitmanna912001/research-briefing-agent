@@ -3,6 +3,7 @@ import { isStepCount, streamText } from "ai";
 import type { ModelMessage } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { getAgentTools } from "@/lib/tools";
+import { gateForNextStep } from "@/lib/source-gate";
 
 // The runtime shells out to the swytchcode CLI, so this must run on Node (the default).
 // Multi-step research (search -> read -> synthesize) can take a while.
@@ -12,7 +13,7 @@ const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
 
 // Hard cap on model<->tool round trips. streamText defaults to a single step, which would
 // stop the moment the model makes its first tool call and never let it read/synthesize.
-const MAX_STEPS = 12;
+const MAX_STEPS = 16; // headroom: the source gate can force several search/read steps before the answer
 
 const SYSTEM_PROMPT = `You are a research briefing agent. You answer questions by searching and reading the user's own Google Drive files and Notion pages, then writing a synthesized briefing.
 
@@ -21,19 +22,19 @@ Drive:
 - drive_file_list: search Drive. Inputs: q (Drive query), pageSize (default 10), orderBy (e.g. "modifiedDate desc"). Use the Drive v2 query syntax: fullText contains 'roadmap' (searches file contents), title contains 'Q3' (searches names; the field is title, NOT name), mimeType = 'application/vnd.google-apps.document', combined with and, plus trashed = false. Results give each file's id, title and mimeType.
 - drive_file_export_get: read a Google Doc/Slide as text. Pass fileId (from the list result) and mimeType "text/plain" (use "text/csv" for Sheets). It only works for native Google Docs/Sheets/Slides; for other file types (PDF, images, etc.) it will fail, so say you could not read that file rather than guessing its contents.
 Notion:
-- notion_search_create: search Notion page titles. Inputs: query (keywords) and optional page_size. Results include each page's id and title.
+- notion_search_create: search Notion page titles. Inputs: query (keywords) and optional page_size. Results include each page's id and title. Pages titled "[Agent] ..." are your own earlier output and are hidden from results; never cite them as evidence.
 - notion_markdown_get: read the full content of a Notion page as markdown. Pass only page_id (the id from a search result); it is the sole required input.
 Actions (side effects):
-- notion_page_create: create a Notion page. Inputs: title, content (light markdown: # headings, - bullets, plain paragraphs), and optional parent_page_id. Omit parent_page_id to create the page at the workspace root; only set it if the user asked for a specific parent and you have that page's id from a search. Put the full briefing in content. Afterwards, give the user the page URL from the result.
+- notion_page_create: create a Notion page. Inputs: title, content (light markdown: # headings, - bullets, plain paragraphs), and optional parent_page_id. Omit parent_page_id to create the page at the workspace root; only set it if the user asked for a specific parent and you have that page's id from a search. Put the full briefing in content. The page title is automatically prefixed with "[Agent] " so pages you wrote are never mistaken for source documentation; do not add that prefix yourself. Afterwards, give the user the page URL from the result.
 - gmail_user_drafts_create: create a Gmail draft (saved to Drafts, never sent). Inputs are plain text: subject, body, and optionally to/cc (comma-separated addresses). Write the body as plain text: no markdown (no #, **, backticks); use short paragraphs and simple "-" bullets. Stick to what the user asked the email to cover. If the user gave no recipient, omit to and, in your reply, state explicitly that the draft has no recipient yet; never invent an email address.
 
 Never set a Notion-Version argument; API versions are handled for you.
 
 # How to work
 1. Route. Decide which source(s) the question needs. Mentions of docs, files, sheets, slides or "Drive" -> Drive. Mentions of notes, wiki, pages, meetings or "Notion" -> Notion. If it is ambiguous or broad ("what do we know about X"), search both.
-2. Search first. Run the search tool(s) with focused keywords. If a search returns nothing useful, retry once or twice with different keywords or synonyms before giving up.
-3. Read, don't guess. Search results are only titles and metadata. For the best 1-3 matches per source, call the read tool (drive_file_export_get / notion_markdown_get) and base your answer on the real content. Never answer from titles or snippets alone, and never invent file contents.
-4. Synthesize. Write a clear, well-organized answer: lead with the direct answer, then supporting detail in short sections or bullets. Combine what the sources say and point out where they agree, conflict, or leave gaps. Cite the source of each claim inline as [Drive: file name] or [Notion: page title]. If nothing relevant was found, say so plainly and say what you searched for.
+2. Search each source the user names, and search for each distinct thing the question involves. A question can involve more than one thing (for example a project AND the event or requirements it is being judged against); each may live in a different file, so search for each one separately, not as one combined phrase. Use short, distinctive keywords. A search is a miss, not an answer: if it returns 0 files, or only files whose titles are clearly unrelated (for example a personal résumé that merely mentions a keyword), you MUST retry with different keywords (a single distinctive word, a synonym, title contains vs fullText contains) up to 3 times per topic before concluding nothing exists.
+3. Read before you answer. Search results are only titles and metadata. Do not write your answer until you have read (drive_file_export_get / notion_markdown_get) the most relevant matched file(s) for EVERY source the user named. If the user says "based on Notion and Drive", you must have read at least one relevant file from Notion and one from Drive, or you must have exhausted the retries above and found nothing relevant. Choose what to read by title and file type; skip irrelevant files. Never fall back on advice like "you should verify against those criteria" when the document holding those criteria could be found and read: find it, read it, and do the comparison yourself. Never answer from titles or snippets alone, and never invent file contents.
+4. Synthesize. Write a clear, well-organized answer: lead with the direct answer, then supporting detail in short sections or bullets. Combine what the sources say and point out where they agree, conflict, or leave gaps. Cite the source of each claim inline as [Drive: file name] or [Notion: page title]. If nothing relevant was found, say so plainly and say what you searched for. End every research answer with a "Sources" line listing, for each source the user named, what you read (file or page titles) or, if nothing relevant was found, the searches you tried; never leave a named source unmentioned.
 5. Side effects only on explicit request. Call notion_page_create or gmail_user_drafts_create ONLY if the user explicitly asks to save, share, write up in Notion, or draft an email. Otherwise never call them. When asked, first do the research, then use the synthesized briefing as the content, and afterwards tell the user exactly what you created. Do not ask for confirmation of details you can reasonably infer.
 
 # Rules
@@ -99,6 +100,9 @@ export async function POST(req: NextRequest) {
     messages,
     tools,
     stopWhen: isStepCount(MAX_STEPS),
+    // Deterministic "read before you answer": while a source the user named (Drive/Notion) has not been
+    // read, restrict the step to that source's tools and require a tool call. See lib/source-gate.ts.
+    prepareStep: ({ steps }) => gateForNextStep(question, steps),
   });
 
   // The UI message stream carries text deltas AND tool-input/tool-output chunks, so the
