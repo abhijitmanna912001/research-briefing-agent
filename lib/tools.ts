@@ -47,6 +47,17 @@ function patchNotionMarkdown(tools: ToolSet): ToolSet {
 
 const NOTION_DEFAULT_VERSION = "2025-09-03";
 
+// Pages this agent creates are tagged with a title prefix, and search hides anything carrying it.
+// Otherwise the agent's own earlier summaries turn up in later searches and get cited as if they were
+// independent source documentation, so answers quietly become self-confirming.
+export const AGENT_PAGE_PREFIX = "[Agent] ";
+
+function pageTitle(page: unknown): string {
+  const props = (page as { properties?: Record<string, { type?: string; title?: { plain_text?: string }[] }> }).properties ?? {};
+  const t = Object.values(props).find((p) => p.type === "title");
+  return (t?.title ?? []).map((x) => x.plain_text ?? "").join("");
+}
+
 // notion.search.create: the generated schema exposes filter/sort/start_cursor/Notion-Version and the
 // model fills them with junk (filter.property "title" -> 400, start_cursor "null" -> 400, stale
 // Notion-Version 2022-06-28). The model only supplies query and page_size; the filter is locked to
@@ -67,11 +78,22 @@ function patchNotionSearch(tools: ToolSet): ToolSet {
         },
         required: ["query"],
       }),
-      execute: ({ query, page_size }) =>
-        swx.tools.execute(cid, {
+      execute: async ({ query, page_size }) => {
+        const result = await swx.tools.execute(cid, {
           "Notion-Version": NOTION_DEFAULT_VERSION,
           body: { query, page_size: page_size ?? 10, filter: { property: "object", value: "page" } },
-        }),
+        });
+        const data = (result as { data?: { results?: unknown[] } }).data;
+        if (!data || !Array.isArray(data.results)) return result;
+        const kept = data.results.filter((p) => !pageTitle(p).startsWith(AGENT_PAGE_PREFIX));
+        const hidden = data.results.length - kept.length;
+        if (hidden === 0) return result;
+        return {
+          ...(result as object),
+          data: { ...data, results: kept },
+          note: `${hidden} page(s) titled "${AGENT_PAGE_PREFIX}..." were hidden: they are this agent's own earlier output, not source documentation, so never cite them as evidence.`,
+        };
+      },
     }),
   };
 }
@@ -120,6 +142,11 @@ export function markdownToNotionBlocks(md: string): NotionBlock[] {
   return blocks;
 }
 
+function taggedTitle(title: string): string {
+  const t = title.trim();
+  return t.startsWith(AGENT_PAGE_PREFIX) ? t : AGENT_PAGE_PREFIX + t;
+}
+
 function patchNotionPageCreate(tools: ToolSet): ToolSet {
   const base = tools.notion_page_create;
   if (!base) return tools;
@@ -155,7 +182,7 @@ function patchNotionPageCreate(tools: ToolSet): ToolSet {
           "Notion-Version": NOTION_DEFAULT_VERSION,
           body: {
             parent: parent_page_id ? { type: "page_id", page_id: parent_page_id.trim() } : { workspace: true },
-            properties: { title: { title: richText(title.trim()) } },
+            properties: { title: { title: richText(taggedTitle(title)) } },
             ...(blocks.length && { children: blocks.slice(0, NOTION_MAX_BLOCKS) }),
           },
         });
@@ -213,10 +240,10 @@ function patchDriveList(tools: ToolSet): ToolSet {
         },
         required: [],
       }),
-      execute: ({ q, pageSize, orderBy, fields }) => {
+      execute: async ({ q, pageSize, orderBy, fields }) => {
         const query = normalizeDriveQuery(q);
         const v2Order = orderBy?.replace(/\b(modifiedTime|createdTime|name)\b/g, (m) => DRIVE_ORDER_BY_V3_TO_V2[m]);
-        return swx.tools.execute(cid, {
+        const result = await swx.tools.execute(cid, {
           params: {
             q: query,
             maxResults: pageSize ?? 10,
@@ -226,6 +253,18 @@ function patchDriveList(tools: ToolSet): ToolSet {
             includeItemsFromAllDrives: true,
           },
         });
+        // Tool output is what the model reads next. An empty list otherwise looks like "nothing exists"
+        // and the model stops; tell it plainly that this is a search miss, not a verdict.
+        const items = (result as { data?: { items?: unknown[] } }).data?.items ?? [];
+        if (items.length === 0) {
+          return {
+            ...(result as object),
+            note:
+              `No files matched q=${JSON.stringify(query)}. This does not mean the file does not exist. Retry with different, ` +
+              "shorter keywords (one distinctive word, e.g. fullText contains 'Swytchcode') or title contains '...' before concluding nothing is there.",
+          };
+        }
+        return result;
       },
     }),
   };
