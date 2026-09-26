@@ -1,13 +1,33 @@
 @import "tailwindcss";
 
+/* Semantic tokens. Components use these (bg-card, text-muted-foreground, border-border, ...) instead of
+   hardcoded gray-* classes so light/dark stay in sync. */
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --card: #fafafa;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --border: #e4e4e7;
+  --accent: #4f46e5;
+  --accent-foreground: #ffffff;
+  --success: #16a34a;
+  --danger: #dc2626;
+  --code: #f4f4f5;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-code: var(--code);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -16,11 +36,25 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --card: #111113;
+    --muted: #18181b;
+    --muted-foreground: #a1a1aa;
+    --border: #27272a;
+    --accent: #818cf8;
+    --accent-foreground: #0a0a0a;
+    --success: #4ade80;
+    --danger: #f87171;
+    --code: #18181b;
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Native form controls and scrollbars follow the theme. */
+:root {
+  color-scheme: light dark;
 }

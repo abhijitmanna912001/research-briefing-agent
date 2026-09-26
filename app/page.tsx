@@ -1,35 +1,20 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { getToolName, isToolUIPart, readUIMessageStream } from "ai";
+import { useEffect, useRef, useState } from "react";
+import { readUIMessageStream } from "ai";
 import type { UIMessage, UIMessageChunk } from "ai";
+import { BookOpenCheck, FileText, HardDrive, Mail } from "lucide-react";
+import { Composer } from "./components/Composer";
+import { EmptyState } from "./components/EmptyState";
+import { MessageView } from "./components/MessageView";
 
-type ChatMessage = { id: string; role: "user" | "assistant"; parts: UIMessage["parts"]; error?: string };
-
-// Tool name (sanitized canonical id) -> what to show while it runs / after it finishes.
-const TOOL_LABELS: Record<string, { running: string; done: string }> = {
-  drive_file_list: { running: "Searching Google Drive...", done: "Searched Google Drive" },
-  drive_file_export_get: { running: "Reading file from Google Drive...", done: "Read file from Google Drive" },
-  notion_search_create: { running: "Searching Notion...", done: "Searched Notion" },
-  notion_markdown_get: { running: "Reading page from Notion...", done: "Read page from Notion" },
-  notion_page_create: { running: "Creating Notion page...", done: "Created Notion page" },
-  gmail_user_drafts_create: { running: "Drafting Gmail message...", done: "Created Gmail draft" },
-};
+export type ChatMessage = { id: string; role: "user" | "assistant"; parts: UIMessage["parts"]; error?: string };
 
 function textOf(message: ChatMessage) {
   return message.parts
     .filter((p): p is Extract<typeof p, { type: "text" }> => p.type === "text")
     .map((p) => p.text)
     .join("");
-}
-
-// Pull the most informative bit of the tool input for display (search terms, ids, ...).
-function inputSummary(input: unknown): string {
-  if (!input || typeof input !== "object") return "";
-  const i = input as Record<string, unknown>;
-  const body = (i.body ?? {}) as Record<string, unknown>;
-  const hint = i.q ?? body.query ?? i.fileId ?? i.page_id ?? "";
-  return typeof hint === "string" ? hint : "";
 }
 
 // The server sends Server-Sent Events: each `data: {json}` line is one UIMessageChunk
@@ -68,11 +53,20 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const nextId = useRef(0);
+  const scrollRef = useRef<HTMLElement>(null);
+  const stickRef = useRef(true); // follow new content only while the user is at (or near) the bottom
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const question = input.trim();
     if (!question || busy) return;
+    stickRef.current = true; // jump to the new turn even if the user had scrolled up
 
     const userId = `u${nextId.current++}`;
     const assistantId = `a${nextId.current++}`;
@@ -116,65 +110,54 @@ export default function Home() {
     }
   }
 
+  function pickExample(prompt: string) {
+    setInput(prompt);
+    inputRef.current?.focus();
+  }
+
   return (
-    <div className="flex flex-col flex-1 max-w-2xl mx-auto w-full p-4">
-      <h1 className="text-xl font-semibold mb-4">Research Briefing Agent</h1>
-
-      <div className="flex-1 flex flex-col gap-4 mb-4 overflow-y-auto">
-        {messages.map((message) => (
-          <div key={message.id} className="text-sm">
-            <div className="font-medium mb-1">{message.role === "user" ? "You" : "Agent"}</div>
-
-            {message.parts.map((part, i) => {
-              if (part.type === "text") {
-                return (
-                  <div key={i} className="whitespace-pre-wrap">
-                    {part.text}
-                  </div>
-                );
-              }
-              if (isToolUIPart(part)) {
-                const name = getToolName(part);
-                const label = TOOL_LABELS[name] ?? { running: `Running ${name}...`, done: `Ran ${name}` };
-                const failed = part.state === "output-error";
-                const finished = part.state === "output-available" || failed;
-                const hint = inputSummary(part.input);
-                return (
-                  <div key={i} className="my-1 rounded border px-2 py-1 text-xs text-gray-600">
-                    <span>{failed ? "✗" : finished ? "✓" : "…"} </span>
-                    <span>{finished ? label.done : label.running}</span>
-                    {hint && <span className="text-gray-400"> — {hint}</span>}
-                    {failed && <div className="text-red-600">{part.errorText}</div>}
-                    <details className="mt-1">
-                      <summary className="cursor-pointer text-gray-400">{name}</summary>
-                      <pre className="overflow-x-auto">{JSON.stringify(part.input, null, 2)}</pre>
-                    </details>
-                  </div>
-                );
-              }
-              return null;
-            })}
-
-            {message.role === "assistant" && busy && message === messages[messages.length - 1] && !message.error && (
-              <div className="text-xs text-gray-400">Working...</div>
-            )}
-            {message.error && <div className="text-red-600">Error: {message.error}</div>}
+    <div className="flex h-dvh flex-col">
+      <header className="border-b border-border px-4 py-3">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3">
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground">
+            <BookOpenCheck className="size-4" aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-sm font-semibold leading-tight">Research Briefing Agent</h1>
+            <p className="truncate text-xs text-muted-foreground">Cited briefings from your Drive and Notion</p>
           </div>
-        ))}
-      </div>
+          <div className="hidden items-center gap-2 text-muted-foreground sm:flex" aria-label="Connected sources: Drive, Notion, Gmail">
+            <HardDrive className="size-4" aria-hidden />
+            <FileText className="size-4" aria-hidden />
+            <Mail className="size-4" aria-hidden />
+          </div>
+        </div>
+      </header>
 
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask for a research briefing..."
-          className="flex-1 border rounded px-3 py-2"
-          disabled={busy}
-        />
-        <button type="submit" className="border rounded px-4 py-2" disabled={busy}>
-          Send
-        </button>
-      </form>
+      <main
+        ref={scrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        }}
+        className="flex-1 overflow-y-auto"
+      >
+        <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-6 px-4 py-6">
+          {messages.length === 0 ? (
+            <EmptyState onPick={pickExample} />
+          ) : (
+            messages.map((message, i) => (
+              <MessageView
+                key={message.id}
+                message={message}
+                working={busy && message.role === "assistant" && i === messages.length - 1}
+              />
+            ))
+          )}
+        </div>
+      </main>
+
+      <Composer value={input} onChange={setInput} onSubmit={handleSubmit} busy={busy} textareaRef={inputRef} />
     </div>
   );
 }
