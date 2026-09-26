@@ -12,6 +12,7 @@ import {
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { hasMoreDetail, summarizeError } from "./errors";
 
 // isToolUIPart narrows to both static ("tool-<name>") and dynamic tool parts.
 export type ToolPart = ToolUIPart | DynamicToolUIPart;
@@ -104,6 +105,27 @@ export function SourceTile({ name }: Readonly<{ name: string }>) {
   );
 }
 
+// A one-line summary is always visible; the raw error (often the CLI's whole log) sits behind a disclosure,
+// in the same monospace scrolling box as the input JSON below it.
+function ToolError({ text }: Readonly<{ text: string }>) {
+  const summary = summarizeError(text) || "Tool call failed";
+  return (
+    <div className="px-3 pb-2">
+      <p className="wrap-break-word text-xs text-danger">{summary}</p>
+      {hasMoreDetail(text, summary) && (
+        <details className="mt-1">
+          <summary className="cursor-pointer select-none font-mono text-xs text-muted-foreground hover:text-foreground">
+            Full error
+          </summary>
+          <pre className="mt-1.5 max-h-64 max-w-full overflow-auto rounded-lg bg-code p-3 font-mono text-xs leading-relaxed">
+            {text}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export function ToolCard({ part }: Readonly<{ part: ToolPart }>) {
   const name = getToolName(part);
   const label = TOOL_LABELS[name] ?? {
@@ -141,9 +163,7 @@ export function ToolCard({ part }: Readonly<{ part: ToolPart }>) {
       </div>
 
       {status === "error" && part.errorText && (
-        <p className="wrap-break-word px-3 pb-2 text-xs text-danger">
-          {part.errorText}
-        </p>
+        <ToolError text={part.errorText} />
       )}
 
       <details className="border-t border-border">

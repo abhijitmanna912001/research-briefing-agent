@@ -84,7 +84,7 @@ export function ToolGroup({ parts }: Readonly<{ parts: ToolPart[] }>) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-muted/60"
+        className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-muted/60"
       >
         <SourceTile name={name} />
         <div className="min-w-0 flex-1">

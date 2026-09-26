@@ -50,7 +50,7 @@ export function Composer({ value, onChange, onSubmit, busy, textareaRef }: Compo
             type="submit"
             disabled={busy || !value.trim()}
             aria-label={busy ? "Working" : "Send message"}
-            className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="grid size-9 shrink-0 cursor-pointer place-items-center rounded-xl bg-accent text-accent-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <ArrowUp className="size-4" aria-hidden />}
           </button>

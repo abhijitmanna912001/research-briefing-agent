@@ -32,7 +32,7 @@ export function EmptyState({ onPick }: Readonly<{ onPick: (prompt: string) => vo
             key={example}
             type="button"
             onClick={() => onPick(example)}
-            className="rounded-xl border border-border bg-card px-3.5 py-3 text-sm leading-snug transition-colors hover:border-accent hover:bg-muted"
+            className="cursor-pointer rounded-xl border border-border bg-card px-3.5 py-3 text-sm leading-snug transition-colors hover:border-accent hover:bg-muted"
           >
             {example}
           </button>
